@@ -1,0 +1,73 @@
+import pandas as pd
+import matplotlib
+import pymysql
+
+
+from sqlalchemy import create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy import Column, String, Integer, Date
+from sqlalchemy.sql import *
+from datetime import datetime
+from sqlalchemy import Float
+from sqlalchemy import Column, String, Integer, ForeignKey, SmallInteger, Numeric
+
+engine= create_engine('mysql+pymysql://bi:bi@localhost:3306/bi-v2.2', echo= False)
+
+conn = pymysql.connect(
+    host="prod.tcsrv.net",
+    port=int("3306"),
+    user="username",
+    passwd="password",
+    db="",
+    charset='utf8mb4')
+    
+var1= "2019-09-08"
+
+df_token= pd.read_sql_query("select th.token_history_id as usage_history_id, o.order_id order_id, th.token_id as _id,  "
+                "case when t.type in ('gift', 'refund', 'deal_partner') then 'prepaid' "
+                "when t.type= 'customer' then 'discount-token' "
+                "end as 'means_payment', th.amount "
+                "from opencart.order o "
+                "left join opencart.token_history th on o.order_id = th.order_id "
+                "left join opencart.token t on th.token_id = t.token_id "
+                "where t.type is not NULL and date(o.date_added) = '{}' and o.order_status_id = 5 "
+                "order by 1 DESC".format(var1), conn)
+
+df_token
+
+df_coupon= pd.read_sql_query("SELECT ch.coupon_history_id as usage_history_id, o.order_id order_id, ch.coupon_id as _id, "
+                 "case when ch.coupon_id is not null then 'discount-coupon' else 'na' end as 'means_payment', -(ch.amount) amount "
+                 "from opencart.order o "
+                 "left join opencart.coupon_history ch on ch.order_id= o.order_id "
+                 "where date(o.date_added) = '{}' and o.order_status_id = 5 and ch.coupon_id is not null "
+                 " order by 1 desc ".format(var1), conn)
+
+df_coupon
+
+df_discount= pd.concat([df_token, df_coupon])
+
+df_discount= df_discount.sort_values(by= ['order_id'])
+
+df_discount
+
+len(df_discount)
+
+df_discount.to_sql(name= 'discount', schema= 'bi-v2.2', con= engine, if_exists= 'append', index= False)
+
+cols= df_discount.columns.to_list()
+cols
+for i, val in enumerate(cols):
+   print (i, ",",val)
+
+
+myorder = [1, 0, 2, 4, 3]
+cols = [cols[i] for i in myorder]
+cols
+df_discount= df_discount[cols]
+df_discount
+
+df_discount.rename(columns={'id':'_id'}, inplace=True)
+
+conn.close()
+engine.dispose()
