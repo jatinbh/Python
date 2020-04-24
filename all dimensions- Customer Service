@@ -19,8 +19,8 @@ from sqlalchemy import Column, String, Integer, ForeignKey, SmallInteger, Numeri
 conn = pymysql.connect(
     host="prod.tcsrv.net",
     port=int("3306"),
-    user="bi_etl",
-    passwd="Asogekate761",
+    user="username",
+    passwd="password",
     db="",
     charset='utf8mb4')
 
