@@ -1,0 +1,384 @@
+import pandas as pd
+import matplotlib
+import pymysql
+import datetime as dt 
+import json
+
+from sqlalchemy import create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy import Column, String, Integer, Date
+from sqlalchemy.sql import *
+## from datetime import datetime
+from sqlalchemy import Float
+from sqlalchemy import Column, String, Integer, ForeignKey, SmallInteger, Numeric
+
+#from airflow import DAG
+#from airflow.models import Variable
+#from airflow.operators.python_operator import PythonOperator
+# from datetime import timedelta
+
+
+def fact_sales():
+
+    print('HI!')
+    date1 = dt.date(2020, 1, 26)
+    date2 = dt.date(2020, 1, 26)
+    day = dt.timedelta(days=1)
+
+    ## Queries
+    query1= """ SELECT order_id, version, min(created_at) t_date from opencart.v_order_product_merged_confirmed 
+                  where DATE(created_at)= '{}' 
+                  group by order_id, version 
+                  order by min(created_at)"""
+
+
+## order_id, marked_price, discount, selling_price
+
+    query2= """  SELECT order_id, version, SUM(sub_total) marked_price, (SUM(sub_total)-sum(total)) as discount, 
+                      sum(total) as selling_price  from 
+                      ( 
+                          SELECT ot.order_id, ot.code, ot.version, ot.created_at t_date, 
+                          case when code= 'sub_total' THEN value else 0 end as sub_total, 
+                          case when code= 'total' THEN value else 0 end as total 
+                          from opencart.v_order_total_merged_confirmed ot 
+                          where DATE(created_at)= '{}' order by created_at
+                          )t 
+                          group by 1, 2 
+                          order by t_date """
+
+
+    query_rev= """SELECT order_id, version, 
+                                    product_id, price as revenue, resource 
+                                    from opencart.v_order_product_merged_confirmed 
+                                    where DATE(created_at)= '{}' 
+                                    order by created_at"""
+
+
+
+    ## order_id, version, event_cost, extra_addon_cost, insurance_cost
+
+    query3= """ SELECT op.order_id, op.version, product_id, op.price, op.finance_net_rate, 
+                      op.finance_commission_value, 
+                      case when ((op.version%2)=0) then case when op.finance_commission_value is not NULL then round((op.price- op.finance_commission_value), 2) 
+                                                          when op.finance_net_rate is not null then round(op.price- round((op.price- op.finance_net_rate)/1.19, 4), 4) 
+                                                          else 0 end 
+                      ELSE 
+                                                        case when op.finance_commission_value is not NULL then round((op.price+op.finance_commission_value), 2) 
+                                                           when op.finance_net_rate is not null then round(op.price- round((op.price+ op.finance_net_rate)/1.19, 4), 4)  
+                                                            else 0 end 
+                      end as cost_price 
+                      from opencart.v_order_product_merged_confirmed op 
+                      where op.product_id in (2, 3)  and DATE(created_at)= '{}' 
+                      order by created_at """
+
+    ## 'order_id', 'product_id', 'version', 'price', 'contract_model', 'room_finance_net_rate', 'room_finance_comission_value',
+    ##  'mandatory_addon_finance_net_rate', 'mandatory_addon_finance_comission_value', 'created_at'
+
+    mathiasquery= """ SELECT
+                      a.order_id, a.product_id,
+                      a.version,
+                      a.price,
+                      a.contract_model,
+                      a.room_finance_net_rate * f as room_finance_net_rate,
+                      a.room_finance_comission_value * f as room_finance_comission_value,
+                      a.mandatory_addon_finance_net_rate * f as mandatory_addon_finance_net_rate,
+                      a.mandatory_addon_finance_comission_value * f as mandatory_addon_finance_comission_value,a.created_at
+                    from (
+                      SELECT
+                        opm.order_id, opm.product_id,opm.price,opm.version,power(-1, opm.version) f,
+                        opm.created_at,if(opm.finance_commission_value > 0, 'commission', 'net-rate') contract_model,
+                        opm.finance_net_rate room_finance_net_rate,opm.finance_commission_value room_finance_comission_value,
+                        if(sum(oom.finance_net_rate), sum(oom.finance_net_rate), NULL) mandatory_addon_finance_net_rate,
+                        if(sum(oom.finance_commission_value), sum(oom.finance_commission_value), NULL) mandatory_addon_finance_comission_value
+                      from (
+                        select * from opencart.v_order_product_merged_confirmed where DATE(created_at) = '{}'
+                      ) opm
+                      left join (
+                        SELECT * from opencart.v_order_option_merged_confirmed where DATE(created_at) = '{}' and type = 'hsp_addon_mandatory'
+                      ) oom on opm.order_id = oom.order_id and opm.version = oom.version
+                        where
+                          DATE(opm.created_at) = '{}' and type = 'hsp_addon_mandatory'
+                        and opm.product_id = 1
+                        group by opm.order_id, opm.version
+                    ) a """
+
+    ## order_id, version, room_nights
+
+    query5=  """ SELECT order_id, version, 
+                      case when ((version%2)=0) then (value2) else (-value2) end  as room_nights 
+                      from opencart.v_order_option_merged_confirmed 
+                      where DATE(created_at)= '{}' 
+                      and `type`= 'hsp_checkin_nights' 
+                      GROUP by order_id, version 
+                      order by created_at """
+
+
+    ## order_id, version, party json
+
+    query6= """ SELECT order_id, version, party from opencart.v_order_product_merged_confirmed 
+                          where DATE(created_at)= '{}' 
+                          and product_id in (1) order by created_at """
+
+
+    ## order_id, version, created_at, email, sales_manager, account_manager, customer_service
+
+
+    query7="""SELECT op.order_id, op.version, o.email customer_email, o.sales_manager, o.account_manager, 
+                             o.user_id from opencart.v_order_product_merged_confirmed op  
+                                LEFT JOIN  opencart.`order` o on o.order_id= op.order_id  
+                                where DATE(created_at)= '{}' 
+                                GROUP BY op.order_id, op.version 
+                                order by op.created_at """
+
+
+    ## order_id, version, created_at, corresponding hotel_id, corresponding event_id
+
+    query8= """SELECT order_id, version, sum(hotel_id_m) hotel_id, sum(event_id_m) event_id from                              
+                        (                 
+                        SELECT op.order_id, op.version, op.created_at, op.type,
+                        case when hotel_id> 0 then hotel_id else 0 end as hotel_id_m, 
+                        case when event_id> 0  then event_id else 0 end as event_id_m
+                                                 from opencart.v_order_option_merged_confirmed op
+                                                 where DATE(created_at)= '{}' and op.type in ('esp_event', 'hsp_hotel') 
+                                                    order by created_at 
+                        ) t                            
+                        group by 1, 2
+                        order by 3"""
+
+
+    query_bw= """SELECT order_id, version, type, DATE(created_at) t_date,
+                        case when type= 'hsp_checkin_nights' then value end as hotel_checkin_date
+                        from opencart.v_order_option_merged_confirmed
+                        where type in ('hsp_checkin_nights') and DATE(created_at)= '{}' """
+
+
+    fact_insert= """INSERT INTO 'fact_sales' 
+                            ('order_id', 'version', 'date', 'marked_price', 'discount',
+           'selling_price', 'revenue', 'room_rev', 'addon_rev', 'voucher_rev',
+           'event_rev', 'insurance_rev', 'contract_model', 'room_cost_it', 'event_cost',
+           'e_addon_cost', 'room_nights', 'adults', 'children', 'customer_email',
+           'sales_manager', 'account_manager', 'user_id', 'hotel_id', 'event_id',
+           'booking_window')
+                            VALUES (%s, %s, %s, %s, %d, %s)
+                            """
+
+
+    fi= """INSERT INTO 'fact_sales' 
+                            ('order_id')
+                            VALUES (%s)
+                            """
+    
+    conn = pymysql.connect(
+    host="prod.tcsrv.net",
+    port=int("3306"),
+    user="username",
+    passwd="password",
+    db="",
+    charset='utf8mb4')
+    print('connection 1 is successful')
+
+    conn1 = pymysql.connect(
+    host="bi-server.tcsrv.net",
+    port=int("3306"),
+    user="username",
+    passwd="password",
+    db="sales",
+    charset='utf8mb4')
+    print('connection 2 is successful')
+    
+    cursor= conn1.cursor()
+    
+    while date1 <= date2:
+        print(date1.strftime('%Y-%m-%d'))
+        
+        print('yesterday- ',dt.date.today() - dt.timedelta(days=1))
+
+            ### transformation
+    
+        df = pd.read_sql_query( query1.format(date1.strftime('%Y-%m-%d')), conn)
+
+        df2 = pd.read_sql_query( query2.format(date1.strftime('%Y-%m-%d')), conn)
+
+        df3 = pd.read_sql_query( query_rev.format(date1.strftime('%Y-%m-%d')), conn)
+
+        df_t = df3
+
+        for i in df_t.index:
+            df_t.set_value(i, 'room_rev', 0)
+            df_t.set_value(i, 'addon_rev', 0)
+            df_t.set_value(i, 'event_rev', 0)
+            df_t.set_value(i, 'voucher_rev', 0)
+            df_t.set_value(i, 'insurance_rev', 0)
+            if df_t.get_value(i, 'product_id') == 1:
+                df_t.set_value(i, 'room_rev', df_t.get_value(i, 'revenue'))
+                df_t.set_value(i, 'product_sub', 'room')
+                # df_t.set_value(i, 'product_sub_id', df_t.get_value(i, 'resource').rsplit('/', 1)[1])
+            elif df_t.get_value(i, 'product_id') == 2:
+                df_t.set_value(i, 'addon_rev', df_t.get_value(i, 'revenue'))
+                df_t.set_value(i, 'product_sub', 'extra_addon')
+                # df_t.set_value(i, 'product_sub_id', df_t.get_value(i, 'resource').rsplit('/', 1)[1])
+            elif df_t.get_value(i, 'product_id') == 3:
+                df_t.set_value(i, 'event_rev', df_t.get_value(i, 'revenue'))
+                df_t.set_value(i, 'product_sub', 'event')
+                # df_t.set_value(i, 'product_sub_id', df_t.get_value(i, 'resource').rsplit('/', 1)[1])
+            elif df_t.get_value(i, 'product_id') == 4:
+                df_t.set_value(i, 'voucher_rev', df_t.get_value(i, 'revenue'))
+                df_t.set_value(i, 'product_sub', 'voucher')
+                # df_t.set_value(i, 'product_sub_id', 'token_id')
+            elif df_t.get_value(i, 'product_id') == 5:
+                df_t.set_value(i, 'insurance_rev', df_t.get_value(i, 'revenue'))
+                df_t.set_value(i, 'product_sub', 'insurance')
+                # df_t.set_value(i, 'product_sub_id', 'travel_insurance')
+        df_t1 = df_t.groupby(['order_id', 'version']).sum().reset_index(level=['order_id', 'version'])[
+            ['order_id', 'version', 'revenue', 'room_rev', 'addon_rev', 'voucher_rev', 'event_rev', 'insurance_rev']]
+
+        df4 = pd.read_sql_query( mathiasquery.format(date1.strftime('%Y-%m-%d'), date1.strftime('%Y-%m-%d'), date1.strftime('%Y-%m-%d')),
+                                conn)
+        
+        df4.fillna(value=0, inplace=True)
+
+        for i in df4.index:
+            df4.set_value(i, 'rcit', 0)  ## rcit: room_cost_incluse_taxes
+            df4.set_value(i, 'room_et', 0)
+            room_price = 0
+
+            if df4.get_value(i, 'contract_model') == 'net-rate':
+
+                room_et = df4.get_value(i, 'room_finance_net_rate') + df4.get_value(i, 'mandatory_addon_finance_net_rate')
+                room_price = df4.get_value(i, 'price')
+                df4.set_value(i, 'rcit', room_price - round(((room_price - room_et) / 1.19), 4))
+
+            elif df4.get_value(i, 'contract_model') == 'commission':
+
+                room_et = df4.get_value(i, 'room_finance_comission_value') + df4.get_value(i,
+                                                                                           'mandatory_addon_finance_comission_value')
+                room_price = df4.get_value(i, 'price')
+                df4.set_value(i, 'rcit', (room_price - room_et))
+
+        df_room_cost = df4[['order_id', 'version', 'contract_model', 'rcit']]
+
+        df_prod_cost = pd.read_sql_query( query3.format(date1.strftime('%Y-%m-%d')), conn)
+
+        for i in df_prod_cost.index:
+
+            df_prod_cost.set_value(i, 'event_cost', 0)
+            df_prod_cost.set_value(i, 'e_addon_cost', 0)
+
+            if df_prod_cost.get_value(i, 'product_id') == 2:
+                df_prod_cost.set_value(i, 'e_addon_cost', df_prod_cost.get_value(i, 'cost_price'))
+            elif df_prod_cost.get_value(i, 'product_id') == 3:
+                df_prod_cost.set_value(i, 'event_cost', df_prod_cost.get_value(i, 'cost_price'))
+
+        df_g2 = df_prod_cost.groupby(['order_id', 'version']).sum().reset_index(level=['order_id', 'version'])[
+            ['order_id', 'version', 'event_cost', 'e_addon_cost']]
+
+        df5 = pd.read_sql_query( query5.format(date1.strftime('%Y-%m-%d')), conn)
+
+        df6 = pd.read_sql_query( query6.format(date1.strftime('%Y-%m-%d')), conn)
+
+        adults = []
+        children = []
+
+        for i in df6['party']:
+            i = json.loads(i)
+            adults.append(i['adults'])
+            children.append(len(i['children']))
+
+        df6['adults'] = adults
+        df6['children'] = children
+        df6.drop(['party'], axis= 1, inplace=True)
+
+        for i in df6.index:
+            if (df6.get_value(i, 'version')) % 2 != 0:
+                adults = df6.get_value(i, 'adults')
+                children = df6.get_value(i, 'children')
+                df6.set_value(i, 'adults', (-df6.get_value(i, 'adults')))
+                df6.set_value(i, 'children', (-df6.get_value(i, 'children')))
+
+        df7 = pd.read_sql_query( query7.format(date1.strftime('%Y-%m-%d')), conn)
+
+        df8 = pd.read_sql_query( query8.format(date1.strftime('%Y-%m-%d')), conn)
+        ## booking window
+        df9 = pd.read_sql_query( query_bw.format(date1.strftime('%Y-%m-%d')), conn)
+        df9['hotel_checkin_date'] = pd.to_datetime(df9['hotel_checkin_date']).dt.date
+        df9['booking_window'] = df9['hotel_checkin_date'] - df9['t_date']
+        df9['booking_window'] = df9['booking_window'] / pd.Timedelta(1, unit='d')
+        for i in df9.index:
+            if (df9.get_value(i, 'version')) % 2 != 0:
+                df9.set_value(i, 'booking_window', (-df9.get_value(i, 'booking_window')))
+
+        df9.drop(['hotel_checkin_date', 't_date', 'type'], axis= 1, inplace=True)
+
+        dm1 = df.merge(df2, how='left', on=['order_id', 'version'])
+        dm2 = dm1.merge(df_t1, how='left', on=['order_id', 'version'])
+        dm3 = dm2.merge(df_room_cost, how='left', on=['order_id', 'version'])
+        dm4 = dm3.merge(df_g2, how='left', on=['order_id', 'version'])
+        dm5 = dm4.merge(df5, how='left', on=['order_id', 'version'])
+        dm6 = dm5.merge(df6, how='left', on=['order_id', 'version'])
+        dm7 = dm6.merge(df7, how='left', on=['order_id', 'version'])
+        dm8 = dm7.merge(df8, how='left', on=['order_id', 'version'])
+        dm9 = dm8.merge(df9, how='left', on=['order_id', 'version'])
+
+        values = {'marked_price': 0, 'discount': 0, 'selling_price': 0, 'rcit': 0, 'event_cost': 0, 'e_addon_cost': 0, 'sales_manager': 0,
+                  'account_manager': 0, 'user_id': 0, 'room_nights': 0, 'adults': 0, 'children': 0,
+                 'hotel_id': 0, 'event_id': 0, 'booking_window': 0}
+        dm9.fillna(value=values, inplace= True)
+
+        print(dm9.head())
+        
+               #####loading
+        df=dm9
+
+        for i in df.index:
+
+            try:
+                f_order_id = df.get_value(i, 'order_id')
+                f_version = df.get_value(i, 'version')
+                f_date = df.get_value(i, 't_date')
+                f_mp = df.get_value(i, 'marked_price')
+                f_disc = df.get_value(i, 'discount')
+                f_sp = df.get_value(i, 'selling_price')
+                f_rev = df.get_value(i, 'revenue')
+                f_rr = df.get_value(i, 'room_rev')
+                f_ar = df.get_value(i, 'addon_rev')
+                f_vr = df.get_value(i, 'voucher_rev')
+                f_er = df.get_value(i, 'event_rev')
+                f_ir = df.get_value(i, 'insurance_rev')
+                f_cm = df.get_value(i, 'contract_model')
+                f_rc = df.get_value(i, 'rcit')
+                f_ec = df.get_value(i, 'event_cost')
+                f_ac = df.get_value(i, 'e_addon_cost')
+                f_rn = df.get_value(i, 'room_nights')
+                f_a = df.get_value(i, 'adults')
+                f_c = df.get_value(i, 'children')
+                f_ce = df.get_value(i, 'customer_email')
+                f_sm = df.get_value(i, 'sales_manager')
+                f_am = df.get_value(i, 'account_manager')
+                f_ui = df.get_value(i, 'user_id')
+                f_h = df.get_value(i, 'hotel_id')
+                f_e = df.get_value(i, 'event_id')
+                f_bw = df.get_value(i, 'booking_window')
+
+
+                    # print(type(h_id), type(h_country_id), )
+                cursor.execute("INSERT INTO fact_sales (order_id, version, date, marked_price, discount, selling_price, "
+                                   "revenue, room_rev, addon_rev, voucher_rev, event_rev, insurance_rev, "
+                                   "contract_model, room_cost_it, event_cost, e_addon_cost, room_nights, adults, children, "
+                                   "customer_email, sales_manager, account_manager, user_id, hotel_id, event_id, booking_window) "
+                                   "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+                                   "%s, %s, %s, %s, %s, %s, %s) ",
+                                   (int(f_order_id), int(f_version), str(f_date), str(f_mp), str(f_disc), str(f_sp), str(f_rev),
+                                    str(f_rr), str(f_ar), str(f_vr), str(f_er), str(f_ir),
+                                    str(f_cm), str(f_rc), str(f_ec), str(f_ac), str(f_rn), str(f_a), str(f_c),
+                                    f_ce, str(f_sm), str(f_am), float(f_ui), str(f_h), str(f_e), str(f_bw)))
+                conn1.commit()
+                
+            except (pymysql.IntegrityError) as error:
+                print(f_order_id, f_version)    
+        date1 = date1 + day
+        
+    conn.close()
+    print('connection  is closed')
+    conn1.close()
+    print('connection 2 is closed')
