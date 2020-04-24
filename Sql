@@ -1,0 +1,35 @@
+# Active Landing Pages
+SELECT COUNT(page_id) FROM content_service.page WHERE state = 1;
+
+# Active Events
+
+SELECT
+    COUNT(p.status)
+FROM
+    opencart.product AS p
+LEFT JOIN
+    event_service.event AS e ON e.event_id = p.entity_id
+WHERE
+    p.status=1 AND
+    NOW() > DATE(p.date_available) AND
+    NOW() < DATE(p.date_expiry) AND
+    p.entity_type = "event" AND
+    e.has_availabilities = 1
+    
+# Active Hotels
+SELECT
+   COUNT(p.status)
+FROM
+   opencart.product AS p
+LEFT JOIN
+   hotel_service.hotel AS h ON p.entity_id = h.hotel_id
+WHERE
+   p.status=1 AND
+   NOW() > DATE(p.date_available) AND
+   NOW() < DATE(p.date_expiry) AND
+   p.entity_type = "hotel" AND
+   (NOW() < h.valid_until OR
+   h.valid_until IS NULL) AND
+   h.has_availabilities = 1
+   
+   
