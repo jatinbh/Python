@@ -1,0 +1,70 @@
+
+
+
+import pandas as pd
+import matplotlib
+import pymysql
+## import sql_queries
+
+from sqlalchemy import create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy import Column, String, Integer, Date
+from sqlalchemy.sql import *
+from datetime import datetime
+from sqlalchemy import Float
+from sqlalchemy import Column, String, Integer, ForeignKey, SmallInteger, Numeric
+
+
+
+
+conn = pymysql.connect(
+    host="prod.tcsrv.net",
+    port=int("3306"),
+    user="username",
+    passwd="password",
+    db="",
+    charset='utf8mb4')
+
+
+conn1 = pymysql.connect(
+    host="bi-server.tcsrv.net",
+    port=int("3306"),
+    user="username",
+    passwd="password",
+    db="sales",
+    charset='utf8mb4')
+
+cursor= conn1.cursor()
+
+df_hotel= pd.read_sql_query('SELECT hotel_id, name, postal_code, city, country_id, country '
+                  'from hotel_service.hotel '
+                  'where hotel_id!=0', conn)
+
+## print(df_hotel.dtypes)
+
+hotel_insert= """INSERT INTO hotel (hotel_id, name, postal_code, city, country_id, country) 
+                    VALUES (%s, %s, %s, %s, %s, %s)"""
+
+max= pd.read_sql_query('SELECT max(hotel_id)'
+                  'from sales.hotel '
+                  'where hotel_id!=0', conn1).values[0][0]
+
+
+for i in df_hotel.index:
+
+    if df_hotel.get_value(i, 'hotel_id') >max:
+        h_id = df_hotel.get_value(i, 'hotel_id')
+        h_name = df_hotel.get_value(i, 'name')
+        h_code = df_hotel.get_value(i, 'postal_code')
+        h_city = df_hotel.get_value(i, 'city')
+        h_country_id = df_hotel.get_value(i, 'country_id')
+        h_country = df_hotel.get_value(i, 'country')
+
+        # print(type(h_id), type(h_country_id))
+        cursor.execute(hotel_insert, (int(h_id), h_name, h_code, h_city, int(h_country_id), h_country))
+        conn1.commit()
+
+
+conn1.close()
+conn.close()
