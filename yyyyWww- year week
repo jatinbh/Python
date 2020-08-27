@@ -1,0 +1,8 @@
+import datetime
+d = "2013-W26"
+r = datetime.datetime.strptime(d + '-1', "%Y-W%W-%w")
+print(r)
+
+# The -1 and -%w pattern tells the parser to pick the Monday in that week. This outputs:
+
+# 2013-07-01 00:00:00
