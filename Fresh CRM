@@ -1,0 +1,13 @@
+
+CREATE TABLE PUBLIC.FRESH_CRM(
+
+	customer_id	INT,
+	customer_acquisition_channel	CHAR(50)	,
+	delivery_week	CHAR(50)	,
+	delivery_date	date	,
+	net_revenue	NUMERIC(5,2)	,
+	gross_revenue NUMERIC(5,2)	,
+	Discount	NUMERIC(5,2)	,
+	boxes	INT
+	
+);
