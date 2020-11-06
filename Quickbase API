@@ -1,0 +1,386 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[1]:
+
+
+import requests
+
+
+# In[6]:
+
+
+url= 'https://travelcircus.quickbase.com/db/main?a=API_Authenticate&username=user&password=pass&hours=24'
+
+
+# In[3]:
+
+
+r= requests.get(url)
+
+
+# In[4]:
+
+
+r.status_code
+
+
+# In[5]:
+
+
+r.text
+
+
+# In[9]:
+
+
+url= 'https://travelcircus.quickbase.com/db/bivpimkjq?a=td&ticket= ****'
+
+
+# In[10]:
+
+
+url
+
+
+# In[11]:
+
+
+r= requests.get(url)
+
+
+# In[12]:
+
+
+r.status_code
+
+
+# In[13]:
+
+
+print(r.text)
+
+
+# In[ ]:
+
+
+*****
+
+
+# In[20]:
+
+
+url= 'https://travelcircus.quickbase.com/db/bivpimkjq?a=API_GetSchema&ticket=*****&udata=mydata'
+
+
+# In[33]:
+
+
+url= 'https://travelcircus.quickbase.com/db/bjwanv6mn?&ticket= *****&a=q&qid=1'
+
+
+# In[34]:
+
+
+r= requests.get(url)
+
+
+# In[35]:
+
+
+r.text
+
+
+# In[36]:
+
+
+r.status_code
+
+
+# In[ ]:
+
+
+https://travelcircus.quickbase.com/db/target_dbid?a=API_GetSchema&ticket=*****
+&apptoken=app_token&udata=mydata
+
+
+# In[ ]:
+
+
+
+
+
+# In[30]:
+
+
+url= "https://travelcircus.quickbase.com/db/bivpimkjq?a=API_GenResultsTable&ticket= *****&query= '{'8'.BF.'01-01-2016'}"
+
+
+# In[31]:
+
+
+r= requests.get(url)
+
+
+# In[32]:
+
+
+print(r.text)
+
+
+# In[ ]:
+
+
+'https://travelcircus.quickbase.com/db/bivpimkjq?a=API_GenResultsTable&ticket= '
+'*****&qid=5&jht=1&query= '
+'{'6'.CT.'done'}AND{'14'.CT.'USA'}&clist=7.8&slist=6&options=sortorder-A'
+
+
+# In[ ]:
+
+
+'https://travelcircus.quickbase.com/db/bivpimkjq?a=API_GenResultsTable&ticket= '
+'*****&qid=5&jht=1&query= '
+'{'6'.CT.'done'}AND{'14'.CT.'USA'}&clist=7.8&slist=6&options=sortorder-A'
+
+
+# In[41]:
+
+
+import lxml
+import urllib
+
+
+# In[42]:
+
+
+from lxml.html import parse
+from urllib import urlopen
+
+
+# In[37]:
+
+
+parsed = parse(urlopen('https://travelcircus.quickbase.com/db/bjwanv6mn?a=q&qid=1'))
+
+
+# In[45]:
+
+
+url= 'https://travelcircus.quickbase.com/db/bjwanv6mn?act=API_GetSchema&ticket= *****&fmt=flat'
+
+
+# In[46]:
+
+
+r= requests.get(url)
+
+
+# In[47]:
+
+
+print(r.text)
+
+
+# In[51]:
+
+
+url= "https://travelcircus.quickbase.com/db/bjwanv6mn?act=API_GenResultsTable&ticket= *****&qid=32&options=csv"
+
+
+# In[52]:
+
+
+r= requests.get(url)
+
+
+# In[53]:
+
+
+r.text
+
+
+# In[54]:
+
+
+url= "https://travelcircus.quickbase.com/db/bjwanv6mn?act=API_GenResultsTable&ticket= *****&qid=32&options=csv"
+
+
+# In[3]:
+
+
+import requests
+
+
+# In[1]:
+
+
+url= 'https://travelcircus.quickbase.com/db/main?a=API_Authenticate&username=jbhardwaj&password=pass&hours=24'
+
+
+# In[4]:
+
+
+r= requests.get(url)
+
+
+# In[5]:
+
+
+r.text
+
+
+# In[ ]:
+
+
+9_bpxy9say7_b4ppsk_ecpp_a_-b_ce2sqt659qae4ccny684zf6h8qbmi9ekpdkknsjrtkrxjedfjjgs8_cwvhkd8
+
+
+# In[ ]:
+
+
+datetime.datetime.strptime(when, '%Y-%m-%d').date()
+
+
+# In[12]:
+
+
+url= "https://travelcircus.quickbase.com/db/bjwanv6mn?act=API_GenResultsTable&ticket= *****&qid=1&options=csv"
+
+
+# In[13]:
+
+
+r= requests.get(url)
+
+
+# In[15]:
+
+
+data= r.text
+
+
+# In[17]:
+
+
+data.splitlines()
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+datetime.datetime.strptime(when, '%Y-%m-%d').date()
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+# In[2]:
+
+
+import requests
+import xml.etree.ElementTree as ET
+
+
+# In[4]:
+
+
+response= requests.get(url)
+
+
+# In[5]:
+
+
+if response.status_code== 200:
+    print ("connection is successful")
+
+
+# In[6]:
+
+
+def ticket_func():
+    for child in ET.fromstring(response.text).findall('ticket'):
+        return (child.text)
+
+
+# In[7]:
+
+
+ticket_func()
+
+
+# In[8]:
+
+
+url_fetch= 'https://travelcircus.quickbase.com/db/bjwanv6mn?ticket={}&a=API_GenResultsTable&qid=1&options=csv'.format('9_bpyjaz8xm_b4ppsk_ecpp_a_-b_dqg862457qvc7bmeq2gmbxetxnkbmwjj7qc8ip9imgxcscjc33aszf_cxmsnr9')
+
+
+# In[30]:
+
+
+qb_response= requests.get(url_fetch)
+
+
+# In[10]:
+
+
+import csv
+
+
+# In[19]:
+
+
+import pandas as pd
+
+
+# In[23]:
+
+
+import collections
+from collections import OrderedDict
+
+
+# In[31]:
+
+
+from collections import OrderedDict, Counter
+import pandas as pd
+
+col = Counter()
+for k in csv.DictReader(qb_response.text.splitlines()):
+    col.update(k)
+
+
+# In[33]:
+
+
+df= pd.DataFrame([k.values() for k in csv.DictReader(qb_response.text.splitlines())], columns = col.keys())
+
+
+# In[34]:
+
+
+df.dtypes
+
+
+# In[ ]:
+
+
+for i, row in df.iterrows():
+    print(row['Record ID#']))
+
