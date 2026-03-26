@@ -1,3 +1,5 @@
+# changed column name from kassa to kasse
+
 import os
 import pandas as pd
 from sqlalchemy import create_engine, text, inspect
