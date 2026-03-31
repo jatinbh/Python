@@ -1,0 +1,188 @@
+# changed column name from kassa to kasse
+
+import os
+import pandas as pd
+from sqlalchemy import create_engine, text, inspect
+import logging
+from datetime import datetime
+from timeit import default_timer as timer
+
+#Time taken: 16522.58 seconds. 2 Hr 57 mins
+# Enable logging for debugging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Account configurations
+accounts = {
+    'DEV Write': {
+        'server': 'zen-dev1-edison-ne-sqlmi01.e5167300588a.database.windows.net',
+        'database': 'Edison_DE',
+        'authentication': 'ActiveDirectoryInteractive',
+        'user': 'narayana.yanamandram-adm@zentiva.com'
+    },
+    'PRD Write': {
+        'server': 'zen-prod1-edison-ne-sqlmi01.75c267828058.database.windows.net',
+        'database': 'Edison_DE',
+        'authentication': 'ActiveDirectoryInteractive',
+        'user': 'jatin.bhardwaj@zentiva.com'
+    }
+}
+
+
+def get_connection_string(account_name):
+    account = accounts.get(account_name)
+    if not account:
+        raise ValueError(f"Account {account_name} not found in configuration.")
+    
+    # Build the connection string
+    connection_string = (
+        f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+        f"SERVER={account['server']};"
+        f"DATABASE={account['database']};"
+        f"Authentication={account['authentication']};"
+        f"UID={account['user']}"
+    )
+    return connection_string
+
+def choose_account():
+    """Interactively select an account."""
+    print("Available Accounts:")
+    for idx, account_name in enumerate(accounts.keys(), 1):
+        print(f"{idx}. {account_name}")
+    
+    choice = int(input("Select an account by number: ")) - 1
+    account_names = list(accounts.keys())
+    if 0 <= choice < len(account_names):
+        return account_names[choice]
+    else:
+        raise ValueError("Invalid account selection.")
+
+def connect_to_database(account_name):
+    """Connect to SQL Server using the selected account."""
+    try:
+        conn_string = get_connection_string(account_name)
+        engine = create_engine(f"mssql+pyodbc:///?odbc_connect={conn_string}")
+        logger.info(f"Connected successfully with {account_name}.")
+        return engine
+    except Exception as e:
+        logger.error(f"Failed to connect with {account_name}: {e}")
+        raise
+
+def get_processed_files(engine, schema_name, table_name):
+    """Retrieve the list of processed filenames from the database."""
+    try:
+        query = text(f"SELECT DISTINCT filename FROM {schema_name}.{table_name}")
+        with engine.connect() as conn:
+            result = conn.execute(query)
+            return set(row[0] for row in result)
+    except Exception as e:
+        logger.warning(f"Could not fetch processed files: {e}")
+        return set()
+
+def change_column_dtypes(df, dtype_mapping):
+    """Change column datatypes based on a mapping."""
+    for column, dtype in dtype_mapping.items():
+        if column in df.columns:
+            try:
+                df[column] = df[column].astype(dtype)
+            except Exception as e:
+                logger.warning(f"Could not convert column {column} to {dtype}: {e}")
+    return df
+
+
+
+def show_and_skip_bad_lines(bad_line):
+    print("⚠️ Bad line skipped:", bad_line)
+    bad_lines.append(bad_line)
+    return None
+
+
+def process_and_load_data(engine, folder_path, schema_name, table_name):
+    """Process and load Excel data into the database."""
+    start_time = timer()
+
+    if not os.path.isdir(folder_path):
+        logger.error(f"Folder not found: {folder_path}")
+        return
+
+    # Identify Excel files
+    files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.xlsx', '.xls'))]
+    if not files:
+        logger.warning(f"No Excel files found in the folder: {folder_path}")
+        return
+
+    logger.info(f"Files found: {files}")
+
+    processed_files = get_processed_files(engine, schema_name, table_name)
+    new_files = [f for f in files if f not in processed_files]
+
+    if not new_files:
+        logger.info("No new files to process.")
+        return
+
+    logger.info(f"New files to process: {new_files}")
+
+    dtype_mapping = {
+        'date': 'datetime64[ns]',
+        'pzn': 'str',
+        'sell_out_units_1': 'Int64',
+        'sell_out_euro_euro_1': 'Int64'
+    }
+
+    chunk_size = 10000
+
+    for file in new_files:
+        try:
+            file_path = os.path.join(folder_path, file)
+
+            # Read Excel file
+            df = pd.read_excel(
+                file_path,
+                dtype=str,          # read all as string first
+                engine='openpyxl'   # recommended for .xlsx
+            )
+
+            df = df.loc[:, ~df.columns.str.contains('^Unnamed')]  # drop unnamed columns
+
+            # Manual chunking
+            for start in range(0, len(df), chunk_size):
+                chunk = df.iloc[start:start + chunk_size].copy()
+
+                chunk['Inserted_Datetime'] = datetime.now()
+                chunk['filename'] = file
+
+                chunk = change_column_dtypes(chunk, dtype_mapping)
+
+                chunk.to_sql(
+                    name=table_name,
+                    schema=schema_name,
+                    con=engine,
+                    if_exists='append',
+                    index=False
+                )
+
+                logger.info(f"Inserted rows {start}–{start + len(chunk)} for file {file}")
+
+        except Exception as e:
+            logger.error(f"Error processing file {file}: {e}")
+
+    end_time = timer()
+    logger.info(f"Time taken: {end_time - start_time:.2f} seconds.")
+
+
+# Example usage
+if __name__ == "__main__":
+    try:
+        selected_account = choose_account()
+        engine = connect_to_database(selected_account)
+
+        # Folder path and table details
+        folder_path =  r'\\nt1.zentiva.corp\dfs\Apps\DWH\Prod\Data1\Jupiter\IN\DE\IQVIA\IQVIA_PSC'
+        database = 'Edison_DE'
+        schema_name = 'raw'
+        table_name = 'tbl_IQVIA_PSC_2'
+        bad_lines = [] 
+
+        process_and_load_data(engine, folder_path, schema_name, table_name)
+    except Exception as e:
+        logger.error(f"Script failed: {e}")
