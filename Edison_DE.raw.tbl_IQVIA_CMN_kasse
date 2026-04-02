@@ -184,7 +184,7 @@ if __name__ == "__main__":
         engine = connect_to_database(selected_account)
 
         # Folder path and table details
-        folder_path =  r'\\nt1.zentiva.corp\dfs\Apps\DWH\Prod\Data1\Jupiter\IN\DE\IQVIA\IQVIA_CMN\IQVIA_CMN_Kasse'
+        folder_path =  r'folder address'
         database = 'Edison_DE'
         schema_name = 'raw'
         table_name = 'tbl_IQVIA_CMN_kasse'
