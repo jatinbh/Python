@@ -1,0 +1,255 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# ## NB_DE_BRZ_Batch
+# 
+# New notebook
+
+# # Set-Up
+
+# In[8]:
+
+
+from pyspark.sql import functions as F
+import json
+from pyspark.sql import types as T
+from datetime import datetime, timezone
+from delta.tables import DeltaTable
+from notebookutils import mssparkutils
+from notebookutils import fs
+from zentisupp import spark_utils
+
+
+# In[9]:
+
+
+variables = notebookutils.variableLibrary.getLibrary("LB_Variables")
+LH_BRONZE_BASE = variables.LH_DE_BRONZE_Path
+LH_SILVER_BASE = variables.LH_DE_SILVER_Path
+LH_GOLD_BASE = variables.LH_DE_GOLD_Path
+LH_PROCESSING_BASE = variables.LH_Zentilake_Processing_Path
+LH_DE_METADATA_BASE = variables.LH_DE_METADATA_Path
+
+# print(LH_BRONZE_BASE)
+# print(LH_SILVER_BASE)
+# print(LH_GOLD_BASE) 
+# print(LH_PROCESSING_BASE)  
+# print(LH_DE_METADATA_BASE) 
+
+
+# In[10]:
+
+
+# --- Parameter cell --- 
+# PAR_PL_SolutionItemId = "371E6237-9CE1-4DCD-9725-875EC1D2B8B0" # LauerTaxe 
+# PAR_PL_SolutionItemId = "F5B6EF2B-4037-43B5-8A94-94C0B3266878" # ITL Contracts
+# PAR_PL_SolutionItemId = "90503022-CA5A-4887-A6B1-C4C43B987261" # ABDA
+# PAR_PL_SolutionItemId = "058F699A-7420-4054-808C-95E4EF915F1D" # HOS
+# PAR_PL_SolutionItemId = "10996F55-D4FA-407D-84AF-CC6B4A8839CA" # PSC Full market
+# PAR_PL_SolutionItemId = "89D996FD-45C3-47D0-80AC-D469DDAACDF3" # CMN
+# PAR_PL_SolutionItemId = "7E88CB15-FA4B-4BA4-BA5C-2AE2A4933B2B" # PHI
+PAR_PL_SolutionItemId = "CD518B3A-D84A-421D-9A89-25C646D2D6DE" # Product_Mapping
+
+
+# In[11]:
+
+
+key = PAR_PL_SolutionItemId.lower()
+
+row = (spark.read.format("delta")
+       .load(f"{LH_PROCESSING_BASE}/Tables/metadata/PipelineParams_PL_RunNotebook")                
+       .where(F.lower(F.col("SolutionItemId")) == F.lit(key))         
+       .limit(1)                                                   
+       .first())                                          
+
+if not row:
+    raise ValueError(f"Parameters not found for SolutionItemId={PAR_PL_SolutionItemId}")
+
+sol_Item = row["NotebookParameters"]
+
+if not sol_Item:
+    raise ValueError(f"NotebookParameters is null/empty for SolutionItemId={PAR_PL_SolutionItemId}")
+
+try:
+    file_info = json.loads(sol_Item)[0] if sol_Item.strip().startswith("[") else json.loads(sol_Item)
+except Exception as e:
+    raise ValueError(f"Failed to parse NotebookParameters JSON for {PAR_PL_SolutionItemId}: {e}")
+
+source_path     = file_info["source_path"]
+source_file     = file_info["source_file"]
+xlsx_sheet      = file_info["xlsx_sheet"]
+sink_schema     = file_info["sink_schema"]
+sink_table      = file_info["sink_table"]
+
+
+# In[12]:
+
+
+print(source_path)
+print(source_file)
+print(xlsx_sheet)
+print(sink_schema)
+print(sink_table)
+
+
+# In[13]:
+
+
+# MAPPING_TABLE_PATH = f"{LH_PROCESSING_BASE}/Tables/metadata/Mapping"
+MAPPING_TABLE_PATH = f"{LH_DE_METADATA_BASE}/Tables/metadata/Mapping_Batch"
+df_mapping_all = spark.read.format("delta").load(MAPPING_TABLE_PATH)
+display(df_mapping_all)
+# display(df_mapping_all.filter(
+#         F.col("Bronze_LH_Table").like("%IQVIA%")
+#     ))
+
+
+# # BRONZE
+
+# In[14]:
+
+
+# ATTENTION: AI-generated code can include errors or operations you didn't intend. Review the code in this cell carefully before running it.
+
+# Ensure sheet parameter is normalized
+if isinstance(xlsx_sheet, str) and xlsx_sheet.strip() == "":
+    xlsx_sheet = None
+
+# Filter out directories – reuse your existing 'files' list
+files = [f for f in fs.ls(source_path) if not f.path.endswith("/")]
+if not files:
+    raise ValueError(f"No files found in {source_path}")
+
+per_file_dfs = []
+
+for f in files:
+    path = f.path
+    ext = path.split(".")[-1].lower() if "." in path else ""
+
+    # 1) Read file as you already do
+    df = spark_utils.read_by_ext(path, ext, xlsx_sheet,encoding="ISO-8859-1")
+
+    # 2) Apply column sanitisation
+    df = spark_utils.sanitize_columns(df)
+
+    # 3) Derive timestamp from this file's modifyTime
+    file_dt = datetime.fromtimestamp(f.modifyTime / 1000, tz=timezone.utc)
+    file_ts_str = file_dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+    df = df.withColumn("TimeStamp", F.lit(file_ts_str))
+
+    per_file_dfs.append(df)
+
+if not per_file_dfs:
+    raise ValueError(f"Files found in {source_path} but no dataframes were created.")
+
+# 4) Union all per-file DataFrames
+raw_all = per_file_dfs[0]
+for df in per_file_dfs[1:]:
+    raw_all = raw_all.unionByName(df, allowMissingColumns=True)
+
+display(raw_all)
+
+
+# In[ ]:
+
+
+
+
+
+# In[15]:
+
+
+# ATTENTION: AI-generated code can include errors or operations you didn't intend. Review the code in this cell carefully before running it.
+
+# At this point raw_all is already sanitised and has TimeStamp
+bronze_ts = raw_all
+
+exclude_from_hash = ["TimeStamp"]
+hash_col_names = [c for c in bronze_ts.columns if c not in exclude_from_hash]
+hash_col_names = sorted(hash_col_names)
+
+bronze_hash = bronze_ts.withColumn(
+    "hash",
+    F.sha2(F.to_json(F.struct([F.col(c) for c in hash_col_names])), 256)
+)
+
+bronze_deduped = bronze_hash.dropDuplicates(subset=["hash"])
+display(bronze_deduped)
+
+
+# In[15]:
+
+
+target_path = f"{LH_BRONZE_BASE}/Tables/{sink_schema}/{sink_table}"
+
+(bronze_deduped.write
+    .mode("overwrite")
+    .format("delta")
+    .option("overwriteSchema", "true")
+    .save(target_path))
+
+
+# # SILVER
+
+# In[ ]:
+
+
+df_bronze = spark.read.format("delta").load(f"{LH_BRONZE_BASE}/Tables/{sink_schema}/{sink_table}")
+
+
+# In[ ]:
+
+
+layers_to_process = ["Silver", "Gold"]
+
+for layer in layers_to_process:
+    # 1. We get the mapping for the silver layer
+    dtypes_src, rename_map, layer_table_path, mapping_errors, dtypes_tgt, transformations = spark_utils.get_spark_layer_mapping(
+        df_mapping_all, PAR_PL_SolutionItemId, layer=layer,
+        input_cols=df_bronze.columns, fallback_schema=sink_schema, fallback_table=sink_table
+    )
+    base_uri = LH_SILVER_BASE if layer == "Silver" else LH_GOLD_BASE
+    target_path = f"{base_uri}/Tables/{layer_table_path}"
+
+    # 2. We now apply the transformations which include colname changes, data type overrides, applying normalization of values, ...
+    select_exprs = []
+
+    for src_col in df_bronze.columns:
+        target_col = rename_map.get(src_col, src_col)
+        expr = F.col(src_col)
+
+        dtype = dtypes_tgt.get(target_col) or dtypes_src.get(src_col) or T.StringType()
+        expr = spark_utils.cast_spark_column(expr, dtype, target_col, transformations)
+
+        select_exprs.append(expr.alias(target_col))
+
+    df_source_transformed = df_bronze.select(*select_exprs)
+
+    # 3. Now we apply a delta merge logic Merge which is ultimately responsible for either appending, updating or deleting
+    # Basically, there are 2 options:
+    # - APPEND: hash is in BRONZE but not in SILVER
+    # - DELETE: hash is in SILVER but not in BRONZE
+    if DeltaTable.isDeltaTable(spark, target_path):
+        target_delta = DeltaTable.forPath(spark, target_path)
+        
+        (target_delta.alias("t")
+            .merge(df_source_transformed.alias("s"), "t.hash = s.hash")
+            .whenNotMatchedInsertAll() # append
+            .whenNotMatchedBySourceDelete() # delete
+            .execute())
+        
+        last_operation_stats = target_delta.history(1).select("operationMetrics").collect()[0][0]
+        
+        added = last_operation_stats.get("numTargetRowsInserted", "0")
+        updated = last_operation_stats.get("numTargetRowsUpdated", "0")
+        deleted = last_operation_stats.get("numTargetRowsDeleted", "0")
+        
+        print(f"[{layer}] Metrics: Added: {added} | Updated: {updated} | Deleted: {deleted}")
+        
+    else:
+        # Write in case it is the first load
+        (df_source_transformed.write.format("delta").mode("overwrite")
+            .option("mergeSchema", "true").save(target_path))
+        print(f"[{layer}] Initial Load Completed.")
+
