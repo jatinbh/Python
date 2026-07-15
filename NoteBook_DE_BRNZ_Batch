@@ -7,8 +7,17 @@
 
 # # Set-Up
 
-# In[8]:
-
+# pyspark.sql.functions as F – Spark SQL functions (e.g. col, sha2, to_json).
+# json – to parse the JSON parameter payload.
+# pyspark.sql.types as T – Spark data types (used for casting).
+# datetime, timezone – to build precise timestamps from file modification times.
+# delta.tables.DeltaTable – Delta Lake API to do merge, history, etc.
+# notebookutils.mssparkutils, notebookutils.fs – Fabric helpers, especially fs.ls to list files.
+# zentisupp.spark_utils – your custom utility module; it provides things like:
+# read_by_ext
+# sanitize_columns
+# get_spark_layer_mapping
+# cast_spark_column
 
 from pyspark.sql import functions as F
 import json
@@ -20,8 +29,14 @@ from notebookutils import fs
 from zentisupp import spark_utils
 
 
-# In[9]:
-
+# Loads a variable library named LB_Variables from Fabric.
+# Reads standardized Lakehouse base paths from that library:
+# LH_BRONZE_BASE – Bronze layer base path.
+# LH_SILVER_BASE – Silver layer base path.
+# LH_GOLD_BASE – Gold layer base path.
+# LH_PROCESSING_BASE – processing/metadata Lakehouse path.
+# LH_DE_METADATA_BASE – metadata Lakehouse path for mappings, etc.
+# Prints them for debugging/validation.
 
 variables = notebookutils.variableLibrary.getLibrary("LB_Variables")
 LH_BRONZE_BASE = variables.LH_DE_BRONZE_Path
@@ -40,7 +55,9 @@ LH_DE_METADATA_BASE = variables.LH_DE_METADATA_Path
 # In[10]:
 
 
-# --- Parameter cell --- 
+# Pipeline parameter cell
+# Defines a parameter PAR_PL_SolutionItemId that identifies which pipeline/notebook configuration to use.
+# Marked with tag "parameters" in metadata so it can be overridden when scheduled or called as a child notebook.
 # PAR_PL_SolutionItemId = "371E6237-9CE1-4DCD-9725-875EC1D2B8B0" # LauerTaxe 
 # PAR_PL_SolutionItemId = "F5B6EF2B-4037-43B5-8A94-94C0B3266878" # ITL Contracts
 # PAR_PL_SolutionItemId = "90503022-CA5A-4887-A6B1-C4C43B987261" # ABDA
@@ -51,20 +68,31 @@ LH_DE_METADATA_BASE = variables.LH_DE_METADATA_Path
 PAR_PL_SolutionItemId = "CD518B3A-D84A-421D-9A89-25C646D2D6DE" # Product_Mapping
 
 
-# In[11]:
+# Load notebook parameters from metadata table
+# Uses PAR_PL_SolutionItemId to search a metadata Delta table.
+# Reads a JSON field NotebookParameters.
+# Extracts individual parameters (source paths, sheet, sink schema/table).
 
-
+# Normalize the incoming SolutionItemId to lowercase for case-insensitive comparison
 key = PAR_PL_SolutionItemId.lower()
 
+# Builds the path:
+# LH_PROCESSING_BASE/ Tables/metadata/ PipelineParams_PL_RunNotebook.
+# Reads the Delta table and filters by SolutionItemId (case-insensitive).
+# limit(1).first() returns a single row or None.
+
+# Read from the metadata Delta table
 row = (spark.read.format("delta")
        .load(f"{LH_PROCESSING_BASE}/Tables/metadata/PipelineParams_PL_RunNotebook")                
        .where(F.lower(F.col("SolutionItemId")) == F.lit(key))         
        .limit(1)                                                   
        .first())                                          
 
+# Fails fast if no row is found.
 if not row:
     raise ValueError(f"Parameters not found for SolutionItemId={PAR_PL_SolutionItemId}")
 
+# Retrieves the JSON string in NotebookParameters and validates it.
 sol_Item = row["NotebookParameters"]
 
 if not sol_Item:
@@ -75,6 +103,25 @@ try:
 except Exception as e:
     raise ValueError(f"Failed to parse NotebookParameters JSON for {PAR_PL_SolutionItemId}: {e}")
 
+# JSON parsing:
+# Handles two forms of JSON:
+# Array with one object: "[{...}]" → takes first element.
+# Single object: "{...}" → use directly.
+# Raises a detailed error if JSON parsing fails.
+# Finally, it extracts the individual fields:
+
+try:
+    if sol_Item.strip().startswith("["):
+        file_info = json.loads(sol_Item)[0]
+    else:
+        file_info = json.loads(sol_Item)
+except Exception as e:
+    raise ValueError(
+        f"Failed to parse NotebookParameters JSON for {PAR_PL_SolutionItemId}: {e}"
+    )
+
+
+# These variables control where to read the input and where to write the Bronze table.
 source_path     = file_info["source_path"]
 source_file     = file_info["source_file"]
 xlsx_sheet      = file_info["xlsx_sheet"]
@@ -92,8 +139,15 @@ print(sink_schema)
 print(sink_table)
 
 
-# In[13]:
+# 5. Load mapping metadata
+# Mapping table load
+Purpose:
 
+Sets MAPPING_TABLE_PATH to a mapping Delta table under the metadata Lakehouse (LH_DE_METADATA_BASE), table: metadata/Mapping_Batch.
+Loads it into df_mapping_all.
+display(df_mapping_all) – shows the mapping table.
+The commented filter shows how you can restrict mappings to specific Bronze tables (e.g. containing "IQVIA"), but is not currently executed.
+This mapping is later used to transform Bronze → Silver/Gold schemas.
 
 # MAPPING_TABLE_PATH = f"{LH_PROCESSING_BASE}/Tables/metadata/Mapping"
 MAPPING_TABLE_PATH = f"{LH_DE_METADATA_BASE}/Tables/metadata/Mapping_Batch"
