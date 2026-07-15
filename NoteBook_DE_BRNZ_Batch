@@ -141,13 +141,11 @@ print(sink_table)
 
 # 5. Load mapping metadata
 # Mapping table load
-Purpose:
-
-Sets MAPPING_TABLE_PATH to a mapping Delta table under the metadata Lakehouse (LH_DE_METADATA_BASE), table: metadata/Mapping_Batch.
-Loads it into df_mapping_all.
-display(df_mapping_all) – shows the mapping table.
-The commented filter shows how you can restrict mappings to specific Bronze tables (e.g. containing "IQVIA"), but is not currently executed.
-This mapping is later used to transform Bronze → Silver/Gold schemas.
+# Sets MAPPING_TABLE_PATH to a mapping Delta table under the metadata Lakehouse (LH_DE_METADATA_BASE), table: metadata/Mapping_Batch.
+# Loads it into df_mapping_all.
+# display(df_mapping_all) – shows the mapping table.
+# The commented filter shows how you can restrict mappings to specific Bronze tables (e.g. containing "IQVIA"), but is not currently executed.
+# This mapping is later used to transform Bronze → Silver/Gold schemas.
 
 # MAPPING_TABLE_PATH = f"{LH_PROCESSING_BASE}/Tables/metadata/Mapping"
 MAPPING_TABLE_PATH = f"{LH_DE_METADATA_BASE}/Tables/metadata/Mapping_Batch"
@@ -160,19 +158,35 @@ display(df_mapping_all)
 
 # # BRONZE
 
-# In[14]:
-
-
-# ATTENTION: AI-generated code can include errors or operations you didn't intend. Review the code in this cell carefully before running it.
+# Read raw source files and build Bronze dataframe
+# List all files in the source_path directory.
+# For each file, read it via spark_utils.read_by_ext.
+# Sanitize column names.
+# Attach a per‑file timestamp column.
+# Union all files into a single DataFrame raw_all.
 
 # Ensure sheet parameter is normalized
+# Normalize sheet parameter – treat empty string as None
 if isinstance(xlsx_sheet, str) and xlsx_sheet.strip() == "":
     xlsx_sheet = None
 
+# For Excel files, the sheet name might be optional; empty string is normalized to None.
+
 # Filter out directories – reuse your existing 'files' list
+# Uses notebookutils.fs.ls to list entries under source_path.
+# Keeps only file entries (paths not ending with /).
+# If no files exist, stops with a clear error.
 files = [f for f in fs.ls(source_path) if not f.path.endswith("/")]
 if not files:
     raise ValueError(f"No files found in {source_path}")
+
+
+# For each file:
+# Derives extension.
+# spark_utils.read_by_ext reads Excel/CSV/parquet/etc correctly.
+# spark_utils.sanitize_columns likely standardizes column names (remove spaces, special chars, case, etc.).
+# modifyTime (ms since epoch) is converted to an ISO‑8601 string with milliseconds and a trailing "Z".
+# Adds a column TimeStamp with the same value for all rows from that file.
 
 per_file_dfs = []
 
@@ -180,13 +194,13 @@ for f in files:
     path = f.path
     ext = path.split(".")[-1].lower() if "." in path else ""
 
-    # 1) Read file as you already do
+    # Read file based on extension
     df = spark_utils.read_by_ext(path, ext, xlsx_sheet,encoding="ISO-8859-1")
 
-    # 2) Apply column sanitisation
+    # Sanitize column name
     df = spark_utils.sanitize_columns(df)
 
-    # 3) Derive timestamp from this file's modifyTime
+    # 3) Derive timestamp from this file's modifyTime- Build timestamp from file's modifyTime (ms → seconds)
     file_dt = datetime.fromtimestamp(f.modifyTime / 1000, tz=timezone.utc)
     file_ts_str = file_dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
@@ -194,45 +208,55 @@ for f in files:
 
     per_file_dfs.append(df)
 
+# Safety check: if reading somehow fails for all files.
 if not per_file_dfs:
     raise ValueError(f"Files found in {source_path} but no dataframes were created.")
 
 # 4) Union all per-file DataFrames
+# Unions all per‑file DataFrames into a single raw_all.
+# unionByName(..., allowMissingColumns=True) helps when some files lack certain columns — columns are matched by name and missing columns are filled with nulls.
+# Displays the combined raw Bronze dataset.
+
 raw_all = per_file_dfs[0]
 for df in per_file_dfs[1:]:
     raw_all = raw_all.unionByName(df, allowMissingColumns=True)
 
 display(raw_all)
 
-
-# In[ ]:
-
-
-
-
-
-# In[15]:
-
-
-# ATTENTION: AI-generated code can include errors or operations you didn't intend. Review the code in this cell carefully before running it.
+# Deduplicate using hash
+# Here you create a content hash to deduplicate the Bronze data.
 
 # At this point raw_all is already sanitised and has TimeStamp
+# bronze_ts denotes Bronze data with timestamp.
+# TimeStamp is excluded from hash so a simple change in file modification time does not change the logical record identity.
+# Column names used for hashing are sorted to ensure deterministic struct ordering.
 bronze_ts = raw_all
 
 exclude_from_hash = ["TimeStamp"]
 hash_col_names = [c for c in bronze_ts.columns if c not in exclude_from_hash]
 hash_col_names = sorted(hash_col_names)
 
+# Constructs a JSON representation of the row (only for hash_col_names) and then computes a SHA‑256 hash.
+# Adds this hash as a new column hash
 bronze_hash = bronze_ts.withColumn(
     "hash",
     F.sha2(F.to_json(F.struct([F.col(c) for c in hash_col_names])), 256)
 )
 
+# Removes duplicate rows where the hash is the same.
+# Result is bronze_deduped: the deduplicated Bronze dataset.
 bronze_deduped = bronze_hash.dropDuplicates(subset=["hash"])
 display(bronze_deduped)
 
 
-# In[15]:
+# Save Bronze data to Delta
+# Builds the Bronze target path based on:
+# LH_BRONZE_BASE (from variable library).
+# sink_schema and sink_table (from the metadata JSON).
+# Writes the deduplicated Bronze DataFrame as a Delta table at that path:
+# mode("overwrite") – replaces existing data.
+# option("overwriteSchema", "true") – allows schema changes.
+# This is the “landing” of transformed, deduplicated Bronze data.
 
 
 target_path = f"{LH_BRONZE_BASE}/Tables/{sink_schema}/{sink_table}"
